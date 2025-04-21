@@ -21,7 +21,7 @@ endif()
 
 # Include SDL2 headers
 include_directories(${CMAKE_SOURCE_DIR})
-# include_directories(${CMAKE_SOURCE_DIR}/external/LiteMath/external)
+include_directories(${CMAKE_SOURCE_DIR}/include)
 # include_directories(${CMAKE_SOURCE_DIR}/external/LiteMath)
 
 ############################################################################################################################

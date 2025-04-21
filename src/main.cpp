@@ -6,6 +6,8 @@
 #define TINYOBJLOADER_IMPLEMENTATION
 #include <tiny_obj_loader.h>
 
+#include "push_constants.h"
+
 #include <nvh/fileoperations.hpp>  // For nvh::loadFile
 #include <nvvk/context_vk.hpp>
 #include <nvvk/descriptorsets_vk.hpp>     // For nvvk::DescriptorSetContainer
@@ -16,8 +18,6 @@
 
 static const uint64_t render_width     = 800;
 static const uint64_t render_height    = 600;
-static const uint32_t workgroup_width  = 16;
-static const uint32_t workgroup_height = 8;
 
 VkCommandBuffer AllocateAndBeginOneTimeCommandBuffer(VkDevice device, VkCommandPool cmdPool)
 {
@@ -50,6 +50,9 @@ VkDeviceAddress GetBufferDeviceAddress(VkDevice device, VkBuffer buffer)
 
 int main(int argc, const char** argv)
 {
+  PushConstants push_constants{render_width, render_height};
+  static_assert(sizeof(PushConstants) % 4 == 0, "Push constant size must be a multiple of 4 per the Vulkan spec!");
+
   // Create the Vulkan context, consisting of an instance, device, physical device, and queues.
   nvvk::ContextCreateInfo deviceInfo;  // One can modify this to load different extensions or pick the Vulkan core version
   deviceInfo.apiMajor = 1;             // Specify the version of Vulkan we'll use
@@ -69,7 +72,7 @@ int main(int argc, const char** argv)
   allocator.init(context, context.m_physicalDevice);
 
   // Create a buffer
-  VkDeviceSize       bufferSizeBytes = render_width * render_height * 3 * sizeof(float);
+  VkDeviceSize       bufferSizeBytes = push_constants.render_width * push_constants.render_height * 3 * sizeof(float);
   VkBufferCreateInfo bufferCreateInfo{.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
                                       .size  = bufferSizeBytes,
                                       .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT};
@@ -144,7 +147,7 @@ int main(int argc, const char** argv)
     VkAccelerationStructureGeometryKHR geometry{.sType        = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR,
                                                 .geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR,
                                                 .geometry     = {.triangles = triangles},
-                                                .flags        = VK_GEOMETRY_OPAQUE_BIT_KHR};
+                                                .flags        = VK_GEOMETRY_OPAQUE_BIT_KHR | VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR};
     blas.asGeometry.push_back(geometry);
     // Create offset info that allows us to say how many triangles and vertices to read
     VkAccelerationStructureBuildRangeInfoKHR offsetInfo{
@@ -180,18 +183,27 @@ int main(int argc, const char** argv)
   // Here's the list of bindings for the descriptor set layout, from raytrace.comp.glsl:
   // 0 - a storage buffer (the buffer `buffer`)
   // 1 - an acceleration structure (the TLAS)
+
+  VkPushConstantRange pushConstantRange{.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+                                        .offset = 0,
+                                        .size = sizeof(PushConstants)};
+
   nvvk::DescriptorSetContainer descriptorSetContainer(context);
   descriptorSetContainer.addBinding(0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
   descriptorSetContainer.addBinding(1, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+  descriptorSetContainer.addBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+  descriptorSetContainer.addBinding(3, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
+  descriptorSetContainer.addBinding(4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_COMPUTE_BIT);
   // Create a layout from the list of bindings
   descriptorSetContainer.initLayout();
   // Create a descriptor pool from the list of bindings with space for 1 set, and allocate that set
   descriptorSetContainer.initPool(1);
   // Create a simple pipeline layout from the descriptor set layout:
-  descriptorSetContainer.initPipeLayout();
+  descriptorSetContainer.initPipeLayout(1,                    // Number of push constant ranges
+                                        &pushConstantRange);  // Pointer to push constant ranges
 
   // Write values into the descriptor set.
-  std::array<VkWriteDescriptorSet, 2> writeDescriptorSets;
+  std::array<VkWriteDescriptorSet, 4> writeDescriptorSets;
   // 0
   VkDescriptorBufferInfo descriptorBufferInfo{.buffer = buffer.buffer,    // The VkBuffer object
                                               .range  = bufferSizeBytes};  // The length of memory to bind; offset is 0.
@@ -202,10 +214,18 @@ int main(int argc, const char** argv)
                                                             .accelerationStructureCount = 1,
                                                             .pAccelerationStructures    = &tlasCopy};
   writeDescriptorSets[1] = descriptorSetContainer.makeWrite(0, 1, &descriptorAS);
+  // 2
+  VkDescriptorBufferInfo vertexDescriptorBufferInfo{.buffer = vertexBuffer.buffer, .range = VK_WHOLE_SIZE};
+  writeDescriptorSets[2] = descriptorSetContainer.makeWrite(0, 2, &vertexDescriptorBufferInfo);
+  // 3
+  VkDescriptorBufferInfo indexDescriptorBufferInfo{.buffer = indexBuffer.buffer, .range = VK_WHOLE_SIZE};
+  writeDescriptorSets[3] = descriptorSetContainer.makeWrite(0, 3, &indexDescriptorBufferInfo);
   vkUpdateDescriptorSets(context,                                            // The context
-                         static_cast<uint32_t>(writeDescriptorSets.size()),  // Number of VkWriteDescriptorSet objects
-                         writeDescriptorSets.data(),                         // Pointer to VkWriteDescriptorSet objects
-                         0, nullptr);  // An array of VkCopyDescriptorSet objects (unused)
+                        static_cast<uint32_t>(writeDescriptorSets.size()),  // Number of VkWriteDescriptorSet objects
+                        writeDescriptorSets.data(),                         // Pointer to VkWriteDescriptorSet objects
+                        0, nullptr);  // An array of VkCopyDescriptorSet objects (unused)
+  
+  VkDescriptorBufferInfo imageParamsDescriptorUniformBufferInfo{}; 
 
   // Shader loading and pipeline creation
   VkShaderModule rayTraceModule =
@@ -239,9 +259,17 @@ int main(int argc, const char** argv)
   vkCmdBindDescriptorSets(cmdBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, descriptorSetContainer.getPipeLayout(), 0, 1,
                           &descriptorSet, 0, nullptr);
 
+  // Push push constants:
+  vkCmdPushConstants(cmdBuffer,                               // Command buffer
+                     descriptorSetContainer.getPipeLayout(),  // Pipeline layout
+                     VK_SHADER_STAGE_COMPUTE_BIT,             // Stage flags
+                     0,                                       // Offset
+                     sizeof(PushConstants),                   // Size in bytes
+                     &push_constants);                         // Data
+  
   // Run the compute shader with enough workgroups to cover the entire buffer:
-  vkCmdDispatch(cmdBuffer, (uint32_t(render_width) + workgroup_width - 1) / workgroup_width,
-                (uint32_t(render_height) + workgroup_height - 1) / workgroup_height, 1);
+  vkCmdDispatch(cmdBuffer, (uint32_t(push_constants.render_width) + WORKGROUP_WIDTH - 1) / WORKGROUP_WIDTH,
+                (uint32_t(push_constants.render_height) + WORKGROUP_HEIGHT - 1) / WORKGROUP_HEIGHT, 1);
 
   // Add a command that says "Make it so that memory writes by the compute shader
   // are available to read from the CPU." (In other words, "Flush the GPU caches
@@ -263,7 +291,7 @@ int main(int argc, const char** argv)
 
   // Get the image data back from the GPU
   void* data = allocator.map(buffer);
-  stbi_write_hdr("out.hdr", render_width, render_height, 3, reinterpret_cast<float*>(data));
+  stbi_write_hdr("out.hdr", push_constants.render_width, push_constants.render_height, 3, reinterpret_cast<float*>(data));
   allocator.unmap(buffer);
 
   vkDestroyPipeline(context, computePipeline, nullptr);
