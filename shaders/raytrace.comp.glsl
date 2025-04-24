@@ -155,15 +155,15 @@ void main()
   
   lights[0].pos = vec3(1.f, 2.f, 1.f);
   lights[0].color = vec3(1.f);
-  lights[0].intensity = 0.5;
+  lights[0].intensity = 1;
 
   lights[1].pos = vec3(2.f, 0.f, 0.f);
   lights[1].color = vec3(1.f);
-  lights[1].intensity = 0.1;
+  lights[1].intensity = 1;
 
   lights[2].pos = vec3(0.f, 1.f, 3.f);
   lights[2].color = vec3(1.f);
-  lights[2].intensity = 0.1;
+  lights[2].intensity = 1;
 
   // Get the coordinates of the pixel for this invocation:
   //
@@ -187,7 +187,7 @@ void main()
   // This scene uses a right-handed coordinate system like the OBJ file format, where the
   // +x axis points right, the +y axis points up, and the -z axis points into the screen.
   // The camera is located at (-0.001, 1, 6).
-  const vec3 cameraOrigin = vec3(-0.001, 0, 6.0);
+  const vec3 cameraOrigin = vec3(-0.001, 0, 3.0);
   // Define the field of view by the vertical slope of the topmost rays:
   const float fovVerticalSlope = 1.0 / 5.0;
 
@@ -238,34 +238,27 @@ void main()
       // the normal against rayDirection:
       rayOrigin = hitInfo.worldPosition - 0.0001 * sign(dot(rayDirection, hitInfo.worldNormal)) * hitInfo.worldNormal;
 
-      // For a random diffuse bounce direction, we follow the approach of
-      // Ray Tracing in One Weekend, and generate a random point on a sphere
-      // of radius 1 centered at the normal. This uses the random_unit_vector
-      // function from chapter 8.5:
-      const float theta = 6.2831853 * stepAndOutputRNGFloat(rngState);   // Random in [0, 2pi]
-      const float u     = 2.0 * stepAndOutputRNGFloat(rngState) - 1.0;  // Random in [-1, 1]
-      const float r     = sqrt(1.0 - u * u);
-      rayDirection      = hitInfo.worldNormal + vec3(r * cos(theta), r * sin(theta), u);
-      // Then normalize the ray direction:
-      rayDirection = normalize(rayDirection);
-
       vec3 summedLightColor = vec3(0.f);
 
       for (uint light_i = 0; light_i < 3; light_i++)
       {
-        rayDirection = normalize(lights[light_i].pos - rayOrigin);
+        vec3 rayDirection_light = normalize(lights[light_i].pos - rayOrigin);
 
         rayQueryEXT rayQuery_light;
-        Intersect(rayQuery_light, rayOrigin, rayDirection);
+        Intersect(rayQuery_light, rayOrigin, rayDirection_light);
 
         if(rayQueryGetIntersectionTypeEXT(rayQuery_light, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
         {
-          summedLightColor += lights[light_i].color * lights[light_i].intensity;
+          summedLightColor += computePBR(hitInfo.worldNormal, -rayDirection, rayDirection_light, vec3(1.000, 0.766, 0.336), 1.f, 0.5, lights[light_i].color, dot(hitInfo.worldNormal, rayDirection_light)) * lights[light_i].intensity;
         }
       }
 
       summedLightColor = clamp(summedLightColor, 0.f, 1.f);
       summedPixelColor += summedLightColor;
+    }
+    else
+    {
+      summedPixelColor += vec3(1.f);
     }
   }
 
