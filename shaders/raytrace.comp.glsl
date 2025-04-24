@@ -4,6 +4,7 @@
 
 #extension GL_GOOGLE_include_directive : require
 #include "../include/push_constants.h"
+#include "../include/pbr.h"
 
 #extension GL_EXT_scalar_block_layout : require
 #extension GL_EXT_ray_query : require
@@ -71,6 +72,16 @@ struct HitInfo
   vec3 worldNormal;
 };
 
+struct Light
+{
+  vec3 pos;
+  vec3 dir;
+  vec3 color;
+
+  float angle;
+  float intensity;
+};
+
 HitInfo getObjectHitInfo(rayQueryEXT rayQuery)
 {
   HitInfo result;
@@ -114,11 +125,45 @@ HitInfo getObjectHitInfo(rayQueryEXT rayQuery)
   return result;
 }
 
+void Intersect(rayQueryEXT rayQuery, const vec3 rayOrigin, const vec3 rayDirection)
+{
+  // Trace the ray and see if and where it intersects the scene!
+  // First, initialize a ray query object:
+  rayQueryInitializeEXT(rayQuery,              // Ray query
+                        tlas,                  // Top-level acceleration structure
+                        gl_RayFlagsOpaqueEXT,  // Ray flags, here saying "treat all geometry as opaque"
+                        0xFF,                  // 8-bit instance mask, here saying "trace against all instances"
+                        rayOrigin,             // Ray origin
+                        0.0,                   // Minimum t-value
+                        rayDirection,          // Ray direction
+                        10000.0);              // Maximum t-value
+
+  // Start traversal, and loop over all ray-scene intersections. When this finishes,
+  // rayQuery stores a "committed" intersection, the closest intersection (if any).
+  while(rayQueryProceedEXT(rayQuery))
+  {
+  }
+}
+
 void main()
 {
   // The resolution of the buffer, which in this case is a hardcoded vector
   // of 2 unsigned integers:
   const uvec2 resolution = uvec2(pushConstants.render_width, pushConstants.render_height);
+
+  Light lights[3];
+  
+  lights[0].pos = vec3(1.f, 2.f, 1.f);
+  lights[0].color = vec3(1.f);
+  lights[0].intensity = 0.5;
+
+  lights[1].pos = vec3(2.f, 0.f, 0.f);
+  lights[1].color = vec3(1.f);
+  lights[1].intensity = 0.1;
+
+  lights[2].pos = vec3(0.f, 1.f, 3.f);
+  lights[2].color = vec3(1.f);
+  lights[2].intensity = 0.1;
 
   // Get the coordinates of the pixel for this invocation:
   //
@@ -136,13 +181,13 @@ void main()
     return;
   }
 
-   // State of the random number generator.
+  // State of the random number generator.
   uint rngState = resolution.x * pixel.y + pixel.x;  // Initial seed
 
   // This scene uses a right-handed coordinate system like the OBJ file format, where the
   // +x axis points right, the +y axis points up, and the -z axis points into the screen.
   // The camera is located at (-0.001, 1, 6).
-  const vec3 cameraOrigin = vec3(-0.001, 1.0, 6.0);
+  const vec3 cameraOrigin = vec3(-0.001, 0, 6.0);
   // Define the field of view by the vertical slope of the topmost rays:
   const float fovVerticalSlope = 1.0 / 5.0;
 
@@ -175,68 +220,56 @@ void main()
 
     vec3 accumulatedRayColor = vec3(1.0);  // The amount of light that made it to the end of the current ray.
 
-    // Limit the kernel to trace at most 32 segments.
-    for(int tracedSegments = 0; tracedSegments < 32; tracedSegments++)
+    //  Get intersection info
+    rayQueryEXT rayQuery;
+    Intersect(rayQuery, rayOrigin, rayDirection);
+
+    // Get the type of committed (true) intersection - nothing, a triangle, or
+    // a generated object
+    if(rayQueryGetIntersectionTypeEXT(rayQuery, true) == gl_RayQueryCommittedIntersectionTriangleEXT)
     {
-      // Trace the ray and see if and where it intersects the scene!
-      // First, initialize a ray query object:
-      rayQueryEXT rayQuery;
-      rayQueryInitializeEXT(rayQuery,              // Ray query
-                            tlas,                  // Top-level acceleration structure
-                            gl_RayFlagsOpaqueEXT,  // Ray flags, here saying "treat all geometry as opaque"
-                            0xFF,                  // 8-bit instance mask, here saying "trace against all instances"
-                            rayOrigin,             // Ray origin
-                            0.0,                   // Minimum t-value
-                            rayDirection,          // Ray direction
-                            10000.0);              // Maximum t-value
+      // Ray hit a triangle
+      HitInfo hitInfo = getObjectHitInfo(rayQuery);
 
-      // Start traversal, and loop over all ray-scene intersections. When this finishes,
-      // rayQuery stores a "committed" intersection, the closest intersection (if any).
-      while(rayQueryProceedEXT(rayQuery))
+      // Apply color absorption
+      accumulatedRayColor *= hitInfo.color;
+
+      // Start a new ray at the hit position, but offset it slightly along
+      // the normal against rayDirection:
+      rayOrigin = hitInfo.worldPosition - 0.0001 * sign(dot(rayDirection, hitInfo.worldNormal)) * hitInfo.worldNormal;
+
+      // For a random diffuse bounce direction, we follow the approach of
+      // Ray Tracing in One Weekend, and generate a random point on a sphere
+      // of radius 1 centered at the normal. This uses the random_unit_vector
+      // function from chapter 8.5:
+      const float theta = 6.2831853 * stepAndOutputRNGFloat(rngState);   // Random in [0, 2pi]
+      const float u     = 2.0 * stepAndOutputRNGFloat(rngState) - 1.0;  // Random in [-1, 1]
+      const float r     = sqrt(1.0 - u * u);
+      rayDirection      = hitInfo.worldNormal + vec3(r * cos(theta), r * sin(theta), u);
+      // Then normalize the ray direction:
+      rayDirection = normalize(rayDirection);
+
+      vec3 summedLightColor = vec3(0.f);
+
+      for (uint light_i = 0; light_i < 3; light_i++)
       {
+        rayDirection = normalize(lights[light_i].pos - rayOrigin);
+
+        rayQueryEXT rayQuery_light;
+        Intersect(rayQuery_light, rayOrigin, rayDirection);
+
+        if(rayQueryGetIntersectionTypeEXT(rayQuery_light, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
+        {
+          summedLightColor += lights[light_i].color * lights[light_i].intensity;
+        }
       }
 
-      // Get the type of committed (true) intersection - nothing, a triangle, or
-      // a generated object
-      if(rayQueryGetIntersectionTypeEXT(rayQuery, true) == gl_RayQueryCommittedIntersectionTriangleEXT)
-      {
-        // Ray hit a triangle
-        HitInfo hitInfo = getObjectHitInfo(rayQuery);
-
-        // Apply color absorption
-        accumulatedRayColor *= hitInfo.color;
-
-        // Start a new ray at the hit position, but offset it slightly along
-        // the normal against rayDirection:
-        rayOrigin = hitInfo.worldPosition - 0.0001 * sign(dot(rayDirection, hitInfo.worldNormal)) * hitInfo.worldNormal;
-
-        // For a random diffuse bounce direction, we follow the approach of
-        // Ray Tracing in One Weekend, and generate a random point on a sphere
-        // of radius 1 centered at the normal. This uses the random_unit_vector
-        // function from chapter 8.5:
-        const float theta = 6.2831853 * stepAndOutputRNGFloat(rngState);   // Random in [0, 2pi]
-        const float u     = 2.0 * stepAndOutputRNGFloat(rngState) - 1.0;  // Random in [-1, 1]
-        const float r     = sqrt(1.0 - u * u);
-        rayDirection      = hitInfo.worldNormal + vec3(r * cos(theta), r * sin(theta), u);
-        // Then normalize the ray direction:
-        rayDirection = normalize(rayDirection);
-      }
-      else
-      {
-        // Ray hit the sky
-        accumulatedRayColor *= skyColor(rayDirection);
-        
-        // Sum this with the pixel's other samples.
-        // (Note that we treat a ray that didn't find a light source as if it had
-        // an accumulated color of (0, 0, 0)).
-        summedPixelColor += accumulatedRayColor;
-    
-        break;
-      }
+      summedLightColor = clamp(summedLightColor, 0.f, 1.f);
+      summedPixelColor += summedLightColor;
     }
   }
 
   // Get the index of this invocation in the buffer:
   uint linearIndex       = resolution.x * pixel.y + pixel.x;
-  imageData[linearIndex] = summedPixelColor / float(NUM_SAMPLES);  // Take the average
+  imageData[linearIndex] = summedPixelColor / NUM_SAMPLES;
 }

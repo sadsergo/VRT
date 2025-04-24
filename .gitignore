@@ -35,3 +35,5 @@ build
 bin_x64
 
 *.hdr
+
+*.spv

@@ -90,7 +90,7 @@ int main(int argc, const char** argv)
   std::vector<std::string> searchPaths = {exePath + PROJECT_RELDIRECTORY, exePath + PROJECT_RELDIRECTORY "..",
                                           exePath + PROJECT_RELDIRECTORY "../..", exePath + PROJECT_NAME};
   tinyobj::ObjReader       reader;  // Used to read an OBJ file
-  reader.ParseFromFile(nvh::findFile("scenes/CornellBox-Original-Merged.obj", searchPaths));
+  reader.ParseFromFile(nvh::findFile("scenes/armadillo.obj", searchPaths));
   assert(reader.Valid());  // Make sure tinyobj was able to parse this file
   const std::vector<tinyobj::real_t>   objVertices = reader.GetAttrib().GetVertices();
   const std::vector<tinyobj::shape_t>& objShapes   = reader.GetShapes();  // All shapes in the file
