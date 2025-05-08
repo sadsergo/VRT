@@ -21,7 +21,7 @@ endif()
 
 # Include SDL2 headers
 include_directories(${CMAKE_SOURCE_DIR})
-include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${CMAKE_SOURCE_DIR}/src/app)
 # include_directories(${CMAKE_SOURCE_DIR}/external/LiteMath)
 
 ############################################################################################################################
@@ -55,53 +55,58 @@ _add_package_IMGUI()
 # process the rest of some cmake code that needs to be done *after* the packages add
 #
 _add_nvpro_core_lib()
-
+add_executable(${PROJNAME})
 _add_project_definitions(${PROJNAME})
 
-############################################################################################################################
-# Add the executable
+#--------------------------------------------------------------------------------------------------
+# Source files for this project
 #
-file(GLOB SOURCE_FILES *.cpp *.hpp *.inl *.h *.c src/* include/*)
+file(GLOB SOURCE_FILES *.cpp *.hpp *.inl *.h *.c src/* src/app/* common/*)
+file(GLOB EXTRA_COMMON ${TUTO_KHR_DIR}/common/*.*)
+list(APPEND COMMON_SOURCE_FILES ${EXTRA_COMMON})
+include_directories(${TUTO_KHR_DIR}/common/)
 
-SET(VULKAN_TARGET_ENV vulkan1.2)
+#--------------------------------------------------------------------------------------------------
+# GLSL to SPIR-V custom build
+compile_glsl_directory(
+	SRC "${CMAKE_CURRENT_SOURCE_DIR}/shaders" 
+	DST "${CMAKE_CURRENT_SOURCE_DIR}/spv" 
+	VULKAN_TARGET "vulkan1.2"
+	DEPENDENCY ${VULKAN_BUILD_DEPENDENCIES}
+)
 
-UNSET(GLSL_SOURCES)
-UNSET(SPV_OUTPUT)
-file(GLOB_RECURSE GLSL_HEADER_FILES "shaders/*.h")
-file(GLOB_RECURSE GLSL_SOURCE_FILES "shaders/*.glsl")
-foreach(GLSL ${GLSL_SOURCE_FILES})
-    get_filename_component(FILE_NAME ${GLSL} NAME)
-    _compile_GLSL(${GLSL} "shaders/${FILE_NAME}.spv" GLSL_SOURCES SPV_OUTPUT)
-endforeach(GLSL)
+#--------------------------------------------------------------------------------------------------
+# Sources
+target_sources(${PROJNAME} PUBLIC ${SOURCE_FILES} ${HEADER_FILES})
+target_sources(${PROJNAME} PUBLIC ${COMMON_SOURCE_FILES})
+target_sources(${PROJNAME} PUBLIC ${PACKAGE_SOURCE_FILES})
+target_sources(${PROJNAME} PUBLIC ${GLSL_SOURCES} ${GLSL_HEADERS})
 
-list(APPEND GLSL_SOURCES ${GLSL_HEADER_FILES})
-source_group("Shader Files" FILES ${GLSL_SOURCES})
-
-add_executable(${PROJNAME} ${SOURCE_FILES} ${COMMON_SOURCE_FILES} ${GLSL_SOURCES})
-
-############################################################################################################################
-# Source code group
+#--------------------------------------------------------------------------------------------------
+# Sub-folders in Visual Studio
 #
-source_group("Source Files" FILES ${SOURCE_FILES})
+source_group("Common"       FILES ${COMMON_SOURCE_FILES} ${PACKAGE_SOURCE_FILES})
+source_group("Sources"      FILES ${SOURCE_FILES})
+source_group("Headers"      FILES ${HEADER_FILES})
+source_group("Shader Sources"  FILES ${GLSL_SOURCES})
+source_group("Shader Headers"  FILES ${GLSL_HEADERS})
 
 # Link the SDL2 library to the executable
-target_link_libraries(${PROJNAME} PUBLIC ${SDL2_LIBRARIES} OpenMP::OpenMP_CXX)
-target_link_libraries(${PROJNAME} PUBLIC ${PLATFORM_LIBRARIES} nvpro_core) # link nvpro_core libraries
+target_link_libraries(${PROJNAME} ${SDL2_LIBRARIES} OpenMP::OpenMP_CXX)
+target_link_libraries(${PROJNAME} ${PLATFORM_LIBRARIES} nvpro_core) # link nvpro_core libraries
 
 foreach(DEBUGLIB ${LIBRARIES_DEBUG})
-  target_link_libraries(${PROJNAME} PUBLIC debug ${DEBUGLIB})
+  target_link_libraries(${PROJNAME} debug ${DEBUGLIB})
 endforeach(DEBUGLIB)
 
 foreach(RELEASELIB ${LIBRARIES_OPTIMIZED})
-  target_link_libraries(${PROJNAME} PUBLIC optimized ${RELEASELIB})
+  target_link_libraries(${PROJNAME} optimized ${RELEASELIB})
 endforeach(RELEASELIB)
 
+#--------------------------------------------------------------------------------------------------
+# copies binaries that need to be put next to the exe files (ZLib, etc.)
+#
 _finalize_target( ${PROJNAME} )
 
-install(FILES ${SPV_OUTPUT} CONFIGURATIONS Release DESTINATION "bin_${ARCH}/${PROJNAME}/shaders")
-install(FILES ${SPV_OUTPUT} CONFIGURATIONS Debug DESTINATION "bin_${ARCH}_debug/${PROJNAME}/shaders")
-install(DIRECTORY "../scenes" CONFIGURATIONS Release DESTINATION "bin_${ARCH}/${PROJNAME}")
-install(DIRECTORY "../scenes" CONFIGURATIONS Debug DESTINATION "bin_${ARCH}_debug/${PROJNAME}")
-
-# Set path to executable
-# set(EXECUTABLE_OUTPUT_PATH ${CMAKE_SOURCE_DIR})
+install(FILES ${SPV_OUTPUT} CONFIGURATIONS Release DESTINATION "bin_${ARCH}/${PROJNAME}/spv")
+install(FILES ${SPV_OUTPUT} CONFIGURATIONS Debug DESTINATION "bin_${ARCH}_debug/${PROJNAME}/spv")
